@@ -18,10 +18,10 @@ package ch.qos.logback.core.rolling;
 
 import ch.qos.logback.core.CoreConstants;
 import ch.qos.logback.core.rolling.aws.AmazonS3ClientImpl;
+import ch.qos.logback.core.rolling.helper.*;
 import ch.qos.logback.core.rolling.shutdown.RollingPolicyShutdownListener;
 import ch.qos.logback.core.rolling.shutdown.ShutdownHookType;
 import ch.qos.logback.core.rolling.shutdown.ShutdownHookUtil;
-import java.io.File;
 import java.util.Date;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -43,7 +43,7 @@ public class S3TimeBasedRollingPolicy<E> extends TimeBasedRollingPolicy<E> imple
     private AmazonS3ClientImpl s3Client;
     private ExecutorService    executor;
 
-    private Date lastPeriod;
+    private Compressor s3Compressor;
 
     public S3TimeBasedRollingPolicy() {
 
@@ -55,16 +55,12 @@ public class S3TimeBasedRollingPolicy<E> extends TimeBasedRollingPolicy<E> imple
         prefixIdentifier = false;
 
         executor = Executors.newFixedThreadPool( 1 );
-
-        lastPeriod = new Date();
     }
 
     @Override
     public void start() {
 
         super.start();
-
-        lastPeriod = getLastPeriod();
 
         //Init S3 client
         s3Client = new AmazonS3ClientImpl( getAwsAccessKey(), getAwsSecretKey(), getS3BucketName(), getS3FolderName(), isPrefixTimestamp(),
@@ -74,6 +70,9 @@ public class S3TimeBasedRollingPolicy<E> extends TimeBasedRollingPolicy<E> imple
 
             addInfo( "Using identifier prefix \"" + s3Client.getIdentifier() + "\"" );
         }
+
+        s3Compressor = new Compressor(compressionMode);
+        s3Compressor.setContext(context);
 
         //Register shutdown hook so the log gets uploaded on shutdown, if needed
         ShutdownHookUtil.registerShutdownHook( this, getShutdownHookType() );
@@ -92,29 +91,27 @@ public class S3TimeBasedRollingPolicy<E> extends TimeBasedRollingPolicy<E> imple
 
             //Queue upload the current log file into S3
             //Because we need to wait for the file to be rolled over, use a thread so this doesn't block.
-            executor.execute( new UploadQueuer( elapsedPeriodsFileName, lastPeriod ) );
+            executor.execute( new UploadQueuer( elapsedPeriodsFileName, new Date() ) );
         } else {
 
             //Upload the active log file without rolling
-            s3Client.uploadFileToS3Async( getActiveFileName(), lastPeriod, true );
+            s3Client.uploadFileToS3Async( getActiveFileName(), new Date(), true );
         }
     }
 
-    public Date getLastPeriod() {
+    public void shutdownRollover() throws RolloverFailure {
 
-        Date lastPeriod = ((TimeBasedFileNamingAndTriggeringPolicyBase<E>) timeBasedFileNamingAndTriggeringPolicy).dateInCurrentPeriod;
+        String currentPeriodsFileName = timeBasedFileNamingAndTriggeringPolicy.getCurrentPeriodsFileNameWithoutCompressionSuffix();
+        String currentPeriodStem = FileFilterUtil.afterLastSlash(currentPeriodsFileName);
+        String uploadFilename = String.format("%s%s",currentPeriodsFileName,getFileNameSuffix());
 
-        if (getParentsRawFileProperty() != null) {
-
-            File file = new File( getParentsRawFileProperty() );
-
-            if (file.exists() && file.canRead()) {
-
-                lastPeriod = new Date( file.lastModified() );
-            }
+        if (getParentsRawFileProperty() == null) {
+            compressionFuture = s3Compressor.asyncCompress(currentPeriodsFileName, currentPeriodsFileName, currentPeriodStem);
+        } else {
+            compressionFuture = renameRawAndAsyncCompress(currentPeriodsFileName, currentPeriodStem);
         }
 
-        return lastPeriod;
+        s3Client.uploadFileToS3Async(uploadFilename, new Date());
     }
 
     /**
@@ -123,14 +120,14 @@ public class S3TimeBasedRollingPolicy<E> extends TimeBasedRollingPolicy<E> imple
     @Override
     public void doShutdown() {
 
-        if (isRolloverOnExit()) {
+        if (isRolloverOnExit() && (compressionMode != CompressionMode.NONE)) {
 
             //Do rolling and upload the rolled file on exit
-            rollover();
+            shutdownRollover();
         } else {
 
             //Upload the active log file without rolling
-            s3Client.uploadFileToS3Async( getActiveFileName(), lastPeriod, true );
+            s3Client.uploadFileToS3Async( getActiveFileName(), new Date(), true );
         }
 
         //Shutdown executor
@@ -165,8 +162,6 @@ public class S3TimeBasedRollingPolicy<E> extends TimeBasedRollingPolicy<E> imple
                 addError("Unexpected exception while waiting for " + jobDescription + " job to finish", e);
             }
         }
-
-        lastPeriod = getLastPeriod();
     }
 
     private String getFileNameSuffix() {
