@@ -22,21 +22,18 @@ import java.net.InetAddress;
 import java.net.URL;
 import java.net.URLConnection;
 import java.util.UUID;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
 public class IdentifierUtil {
 
-    @NotNull
     public static String getIdentifier() {
 
         String identifier;
 
         //
-        // 1. Try AWS EC2 Instance ID
+        // 1. Try hostname
         //
 
-        identifier = getContentOfWebpage( "http://instance-data/latest/meta-data/instance-id" );
+        identifier = getHostname();
 
         if (identifier != null) {
 
@@ -44,10 +41,10 @@ public class IdentifierUtil {
         }
 
         //
-        // 2. Try hostname
+        // 2. Try AWS EC2 Instance ID
         //
 
-        identifier = getHostname();
+        identifier = getContentOfWebpage( "http://instance-data/latest/meta-data/instance-id" );
 
         if (identifier != null) {
 
@@ -61,7 +58,6 @@ public class IdentifierUtil {
         return UUID.randomUUID().toString();
     }
 
-    @Nullable
     public static String getContentOfWebpage(String location) {
 
         try {
@@ -97,16 +93,15 @@ public class IdentifierUtil {
         return null;
     }
 
-    @Nullable
     public static String getHostname() {
 
         try {
 
-            String hostname = InetAddress.getLocalHost().getHostAddress();
+            String hostname = InetAddress.getLocalHost().getHostName();
 
             if (hostname != null) {
 
-                hostname = hostname.replaceAll( "[^a-zA-Z0-9.]+", "" ).trim();
+                hostname = hostname.replaceAll( "[^a-zA-Z0-9.-]+", "" ).trim();
             }
 
             if (hostname != null && hostname.length() > 0) {
