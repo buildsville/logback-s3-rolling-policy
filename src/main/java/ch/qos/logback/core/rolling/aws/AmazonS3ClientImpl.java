@@ -19,9 +19,9 @@ package ch.qos.logback.core.rolling.aws;
 import ch.qos.logback.core.rolling.data.CustomData;
 import ch.qos.logback.core.rolling.shutdown.RollingPolicyShutdownListener;
 import ch.qos.logback.core.rolling.util.IdentifierUtil;
-import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.BasicAWSCredentials;
-import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.CannedAccessControlList;
 import com.amazonaws.services.s3.model.PutObjectRequest;
 
@@ -40,13 +40,14 @@ public class AmazonS3ClientImpl implements RollingPolicyShutdownListener {
     private final String awsSecretKey;
     private final String s3BucketName;
     private final String s3FolderName;
+    private final String awsRegion;
 
     private final boolean prefixTimestamp;
     private final boolean prefixIdentifier;
 
     private final String identifier;
 
-    private AmazonS3Client amazonS3Client;
+    private AmazonS3 amazonS3Client;
     private ExecutorService executor;
 
     public AmazonS3ClientImpl(String awsAccessKey, String awsSecretKey, String s3BucketName, String s3FolderName, boolean prefixTimestamp,
@@ -62,6 +63,7 @@ public class AmazonS3ClientImpl implements RollingPolicyShutdownListener {
 
         executor = Executors.newFixedThreadPool( 1 );
         amazonS3Client = null;
+        awsRegion = "ap-northeast-1";
 
         identifier = prefixIdentifier? IdentifierUtil.getIdentifier(): null;
     }
@@ -74,16 +76,10 @@ public class AmazonS3ClientImpl implements RollingPolicyShutdownListener {
     public void uploadFileToS3Async(final String filename, final Date date, final boolean overrideTimestampSetting) {
 
         if (amazonS3Client == null) {
-
-            // If the access and secret key is not specified then try to use other providers
-            if (getAwsAccessKey() == null || getAwsAccessKey().trim().isEmpty()) {
-
-                amazonS3Client = new AmazonS3Client();
-            } else {
-
-                AWSCredentials cred = new BasicAWSCredentials( getAwsAccessKey(), getAwsSecretKey() );
-                amazonS3Client = new AmazonS3Client( cred );
-            }
+            amazonS3Client = AmazonS3ClientBuilder.standard()
+                    .withRegion(awsRegion)
+                    .withCredentials(new DefaultAWSCredentialsProviderChain())
+                    .build();
         }
 
         final File file = new File( filename );
@@ -107,16 +103,16 @@ public class AmazonS3ClientImpl implements RollingPolicyShutdownListener {
             s3ObjectName.append( CustomData.extraS3Folder.get() ).append( "/" );
         }
 
-        //Add timestamp prefix if desired
-        if (prefixTimestamp || overrideTimestampSetting) {
-
-            s3ObjectName.append( new SimpleDateFormat( "yyyyMMdd_HHmmss" ).format( date ) ).append( "_" );
-        }
-
         //Add identifier prefix if desired
         if (prefixIdentifier) {
 
             s3ObjectName.append( identifier ).append( "_" );
+        }
+
+        //Add timestamp prefix if desired
+        if (prefixTimestamp || overrideTimestampSetting) {
+
+            s3ObjectName.append( new SimpleDateFormat( "yyyyMMdd_HHmmss" ).format( date ) ).append( "_" );
         }
 
         s3ObjectName.append( file.getName() );
